@@ -1,0 +1,26 @@
+{
+  "name": "printastic-protocol",
+  "version": "0.0.0",
+  "description": "a simple json wire protocol that supports binary file transfers. For talking with printastic servers.",
+  "main": "index.js",
+  "scripts": {
+    "test": "tap test/*"
+  },
+  "dependencies": {
+    "duplex": "~1.0.0",
+    "node-uuid": "~1.4.0",
+    "through": "~2.1.0"
+  },
+  "devDependencies": {
+    "tap": "~0.4.0"
+  },
+  "repository": "",
+  "keywords": [
+    "print",
+    "wireprotocol",
+    "printastic"
+  ],
+  "author": "Ryan Day",
+  "license": "BSD",
+  "readmeFilename": "README.md"
+}
