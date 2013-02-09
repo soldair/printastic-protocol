@@ -157,7 +157,7 @@ ext(Parser.prototype,{
     return data;
   },
   // recieve data events into the parser.
-  data:function(data){
+  write:function(data){
     if(!data) return false;
     this['state_'+this.state](data);
   },
@@ -165,7 +165,7 @@ ext(Parser.prototype,{
     var i;
 
     if(this.buffer.length) {
-      data = Buffer.concat(this.buffer,data);
+      data = Buffer.concat([this.buffer,data]);
       this.buffer = this.empty;
     }
 
@@ -198,6 +198,8 @@ ext(Parser.prototype,{
             if(md5(message.time+''+secret) === message.key){
               message.success = true;
               this.authorized = true;
+            } else {
+              this.authorized = false;
             }
           }
         }
