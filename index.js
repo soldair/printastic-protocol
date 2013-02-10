@@ -91,6 +91,7 @@ module.exports = function(opts){
 
   var parser = new Parser(opts)
   , fileStream
+  , fileQueue = []
   , buffer = []
   , d = duplex(function (data) {
     parser.write(data);
@@ -111,7 +112,7 @@ module.exports = function(opts){
   });
 
   var _data = function(msg){
-    if(fileStream) buf.push(msg)
+    if(fileStream) buffer.push(msg)
     else d._data(msg);
   }
 
@@ -130,18 +131,28 @@ module.exports = function(opts){
     _data(this.parser.auth());
   };
 
+  d.fileQueue = [];
   d.file = function(data,stream){
-    if(!stream || !stream.on) throw new Error("E_FILE_STREAM invlid stream sent as file");
+    if(!stream || !stream.on) throw new Error("E_FILE_STREAM invalid stream sent as file");
+
     var z = this
     , ended
     ;
 
     data = data||{};
     data.type = "file";
-    data.uuid = uuid();
+    if(!data.uuid) data.uuid = uuid();
+
+    // another file was queued while a file is being transfered.
+    if(fileStream) {
+      stream.pause();
+      z.fileQueue.push([data,stream]);
+      return data;
+    }
+
+    d._data(JSON.stringify(data)+"\n");
 
     fileStream = stream;
-    var paused = false;
     
     stream.on('data',function(buf){
       written = z._data(buf);
@@ -155,7 +166,11 @@ module.exports = function(opts){
       z._data(data.uuid+"\n");
       fileStream = false;
 
-      while(buf.length) z._data(buf.shift());
+      while(buffer.length) z._data(buffer.shift());
+      if(z.fileQueue.length) {
+        z.file.apply(z,z.fileQueue.shift());
+      }
+ 
       // if end was called while streaming file
       if(!z.writeable) z._end();
     });
@@ -169,13 +184,21 @@ module.exports = function(opts){
       // send end message.
       z.message({type:"error",message:"error sending file.",error:e+''});
 
-      while(buf.length) z._data(buf.shift());
+      while(buffer.length) z._data(buffer.shift());
+      if(z.fileQueue.length) {
+        z.file.apply(z,z.fileQueue.shift());
+      }
+
       // if end was called while streaming file
       if(!z.writeable) z._end();
     });
 
     return data;
   };
+
+  d.authorized = function(){
+    return this.parser.authorized;
+  }  
 
   d.on('_drain',function(){
     if(fileStream) fileStream.resume();
@@ -216,6 +239,16 @@ ext(Parser.prototype,{
   },
   // recieve data events into the parser.
   write:function(data){
+
+    // implement lazy encode for object streams..
+    // i want to test the Buffer interface first before i circle back and remove encoding for the sake of decoding ;)
+    if(!Buffer.isBuffer(data)) {
+      if(!data.substr) {
+       data = JSON.stringify(data);
+      }
+      data = new Buffer(data);
+    }
+
     if(!data) return false;
     this['state_'+this.state](data);
   },
@@ -278,13 +311,16 @@ ext(Parser.prototype,{
     var i;
 
     if(this.buffer.length) {
-      data = Buffer.concat(this.buffer,data);
+      data = Buffer.concat([this.buffer,data]);
       this.buffer = this.empty;
     }
+    
+    if((i = bufferIndexOf(data,this.data.uuid)) > -1) {
 
-    while((i = bufferIndexOf(data,this.data.uuid)) > -1) {
-      var last = data.slice(0,i);
-      this.data.stream.emit('data',last);  
+      if(i) {
+        var last = data.slice(0,i);
+        this.data.stream.emit('data',last);  
+      }
 
       data = data.slice(i+this.data.uuid.length);
 
@@ -299,31 +335,31 @@ ext(Parser.prototype,{
     var i;
 
     if(this.buffer.length) {
-      data = Buffer.concat(this.buffer,data);
+      data = Buffer.concat([this.buffer,data]);
       this.buffer = this.empty;
     }
 
-    while((i = bufferIndexOf(data,this.nl)) > -1) {
-      if(i === 0) {
-        data = data.slice(1);
-        this.state = "message";
-        this.state_message(data);
-        return;
+    if((i = bufferIndexOf(data,this.nl)) > -1) {
+
+      var message;
+      if(i) {
+        var message = data.slice(0,i);
+        message = this._parseMessage(message);
       }
 
-      var message = data.slice(0,i);
-      message = this._parseMessage(message);
       if(message){
+        // file stream has ended in an error.
         this.data.stream.emit('error',message);  
       } else {
         // file stream has ended.
         this.data.stream.end();
       }
+      
 
       data = data.slice(i+1);
-
       this.state = "message";
-      this.state_file_status(data);
+      this.state_message(data);
+
       return;
     }
 

@@ -65,23 +65,48 @@ test("auth",function(t){
 
 
 test('send file',function(t){
-  var s = stream({secret:'tricky'})
-  , c = 0
+  var clientStream = stream()
+  , serverStream = stream()
+  , s = 0
   , data
-  , sendStream = through();
+  , sendStream = through()
+  , serverSendStream
   ;
   
-  s.on('message',function(){
-    console.log('message ',arguments);
+  clientStream.pipe(serverStream).pipe(clientStream);
+
+  serverStream.on('message',function(message){
+    s++;
+    t.ok(s == 1,"should only get expected number of server messages.");
+    t.equals(message.type,'file',"should get file type message");
+    t.ok(message.stream,"should get stream");
+
+    serverSendStream = message.stream;
+
+    var dataBuf = [];
+
+    serverSendStream.on('data',function(buf){
+      dataBuf.push(buf);
+    });
+
+    serverSendStream.on('end',function(){
+      t.equals(Buffer.concat(dataBuf).length,201,'should have a 201 length buffer.')
+      t.end();
+    });
   });
 
-  s.file({name:'test'},sendStream);
-
-  s.on('data',function(data){
-     console.log('out: ',data);
+  clientStream.once('data',function(data){
+    t.ok(data, "clientStream should send data");
   });
 
-  t.end();
+  clientStream.file({name:'test'},sendStream);
+
+  sendStream.emit('data',new Buffer(100));
+
+  sendStream.emit('data',new Buffer(101));
+
+  sendStream.end();
+
 });
 
 
