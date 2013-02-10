@@ -1,6 +1,6 @@
 var test = require('tap').test;
 
-var stream = require("../index.js");
+var stream = require("../index.js"), through = require('through');
 
 test("can get message",function(t){
 
@@ -38,7 +38,8 @@ test("can send garbage",function(t){
 
   p.write(new Buffer("bad\n"));
   t.equals(c,0,"should have no message because i didnt flush it with a new line");
-  t.equals(p.state,'message')
+  t.equals(p.state,'message');
+  t.equals(p.buffer.length,0," after a bad message it should not still be in buffer");
   t.end();
 });
 
@@ -63,13 +64,24 @@ test("auth",function(t){
 });
 
 
-test('upload file',function(t){
-  var p = new stream.Parser({secret:'tricky'})
+test('send file',function(t){
+  var s = stream({secret:'tricky'})
   , c = 0
   , data
+  , sendStream = through();
   ;
-
-  p.file({name:1},)
   
+  s.on('message',function(){
+    console.log('message ',arguments);
+  });
+
+  s.file({name:'test'},sendStream);
+
+  s.on('data',function(data){
+     console.log('out: ',data);
+  });
+
   t.end();
 });
+
+

@@ -45,7 +45,7 @@ var duplex = require('duplex')
 //        - if authTime is configured and current time - time > authTime the request fails
 //        - md5 time concatenated with secret into local variable key
 //        - if key equals the key provided authorization is successful
-//        ????- the server must assign boolean success on the message
+//        - the server must the proerty success to boolean on the auth message
 //  "file"
 //    file type messages must include a readableStream which must be assigned to the property "stream"
 //    {type:"file",stream:""}
@@ -89,29 +89,102 @@ var duplex = require('duplex')
 
 module.exports = function(opts){
 
-  var parser = new Parser(opts);
-
-  var d = duplex()
-  .on('_data', function (data) {
-    parser.data(data);
-    console.log('_data',data);
-    //d._data(data);
-    
-  })
-  .on('_end', function () {
-    d._end();
-    console.log('_end');
+  var parser = new Parser(opts)
+  , fileStream
+  , buffer = []
+  , d = duplex(function (data) {
+    parser.write(data);
+  },function(){
+    if(!fileStream) d._end();   
   });
 
   d.parser = parser;
+
+  // in the message callback of this server stream is where logic implementation specific logic goes.
+  // this server need not spit out a response message for every message.
   parser.on('message',function(message){
-    d._data(message)
+    d.emit('message',message);
   });
+
+  parser.on('error',function(error){
+    d.emit('error',error);
+  });
+
+  var _data = function(msg){
+    if(fileStream) buf.push(msg)
+    else d._data(msg);
+  }
+
+  // format generic message
+  d.send = function(data) {
+    if(!data)  throw new Error("E_INVALID cannot send a null message");
+    if(data.type === 'file' || data.type === 'auth') throw new Error("E_RESERVED message type is reserved for protocol use.");
+    if(!data.type) data.type = 'message';
+    
+    _data(JSON.stringify(data)+"\n");
+
+    return data;
+  };
+
+  d.auth = function(){
+    _data(this.parser.auth());
+  };
+
+  d.file = function(data,stream){
+    if(!stream || !stream.on) throw new Error("E_FILE_STREAM invlid stream sent as file");
+    var z = this
+    , ended
+    ;
+
+    data = data||{};
+    data.type = "file";
+    data.uuid = uuid();
+
+    fileStream = stream;
+    var paused = false;
+    
+    stream.on('data',function(buf){
+      written = z._data(buf);
+      if(!written) stream.pause();
+    });
+    
+    stream.once('end',function(){
+      if(ended) return;
+      ended = true;
+      // close the frame and end message
+      z._data(data.uuid+"\n");
+      fileStream = false;
+
+      while(buf.length) z._data(buf.shift());
+      // if end was called while streaming file
+      if(!z.writeable) z._end();
+    });
+
+    stream.once('error',function(e){
+      if(ended) return;
+      ended = true;
+      //close the frame
+      z._data(data.uuid);
+      fileStream = false;
+      // send end message.
+      z.message({type:"error",message:"error sending file.",error:e+''});
+
+      while(buf.length) z._data(buf.shift());
+      // if end was called while streaming file
+      if(!z.writeable) z._end();
+    });
+
+    return data;
+  };
+
+  d.on('_drain',function(){
+    if(fileStream) fileStream.resume();
+  });
+
   return d;
 }
 
 module.exports.Parser = Parser;
-
 
 function Parser(opts){
   opts = ext({
@@ -140,21 +213,6 @@ ext(Parser.prototype,{
     ,time = Date.now()
     ;
     return {type:"auth",key:md5(time+''+secret),time:time};
-  },
-  // format generic message
-  message:function(data){
-    if(!data)  throw new Error("E_INVALID cannot send a null message");
-    if(data.type === 'file' || data.type === 'auth') throw new Error("E_RESERVED message type is reserved for protocol use.");
-    if(!data.type) data.type = message;
-
-    return data;
-  },
-  // format file message
-  file:function(data,stream){
-    data = data||{};
-    data.type = "file";
-    data.stream = stream;
-    return data;
   },
   // recieve data events into the parser.
   write:function(data){
@@ -210,6 +268,10 @@ ext(Parser.prototype,{
     // part of
     if(data.length) {
       this.buffer = data;
+      if(this.buffer.length > this.opts.maxBufferLength) {
+        this.buffer = new Buffer();
+        this.emit('error',new Error("E_BUFFER_TO_LARGE buffered data is too large. "+this.opts.maxBufferLength+" limit exceded by "+(this.buffer.length-this.opts.maxBufferLength)+" bytes."));
+      }
     }
   },
   state_file:function(data){
